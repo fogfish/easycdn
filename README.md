@@ -1,6 +1,6 @@
 # EasyCDN
 
-EasyCDN is AWS CDK L# Construct that takes care about configuration of the infrastructure required to securely deliver content through AWS CloudFront. 
+EasyCDN is AWS CDK L3 Construct that takes care about configuration of the infrastructure required to securely deliver content through AWS CloudFront. 
 
 [![Build Status](https://github.com/fogfish/easycdn/workflows/build/badge.svg)](https://github.com/fogfish/easycdn/actions/)
 [![Git Hub](https://img.shields.io/github/last-commit/fogfish/easycdn.svg)](https://github.com/fogfish/easycdn)
@@ -55,6 +55,15 @@ npm install
 npm run build
 npm run test
 npm run lint
+```
+
+## HowTo Release Runtime
+
+```bash
+npm run build
+npm run package
+
+cp -R dist/go/easycdn github.com/fogfish/go-cdk-easycdn
 ```
 
 ## License

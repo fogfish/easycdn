@@ -11,7 +11,7 @@
     "build:watch": "jsii --watch",
     "package": "jsii-pacmak",
     "prepare": "npm run build",
-    "clean": "rm lib/*.js lib/*.d.ts"
+    "clean": "rm lib/*.js lib/*.d.ts test/*.js test/*.d.ts && rm -Rf dist"
   },
   "license": "MIT",
   "repository": {
@@ -25,7 +25,7 @@
     "versionFormat": "full",
     "targets": {
       "go": {
-        "moduleName": "github.com/fogfish/easycdn",
+        "moduleName": "github.com/fogfish/go-cdk-easycdn",
         "packageName": ""
       }
     }

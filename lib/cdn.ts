@@ -24,17 +24,20 @@ export interface CdnProps {
 
 //
 export class Cdn extends Construct {
+  public readonly distribution: cdk.aws_cloudfront.CloudFrontWebDistribution
 
   public constructor(scope: Construct, id: string, props: CdnProps) {
     super(scope, id)
 
-
     const origin = props.bucket ?? this.bucket(props.site)
     const zone = this.hostedZone(props.site)
-    const dist = this.cloudfront(origin, props.httpVersion, props.site, props.tlsCertificateArn)
-    this.cloudfrontDNS(props.site, zone, dist)
+    const access = this.accessControl()
+    this.distribution = this.cloudfront(origin, access, props.httpVersion, props.site, props.tlsCertificateArn)
+    this.injectBucketPolicy(origin, this.distribution.distributionId)
+    this.cloudfrontDNS(props.site, zone, this.distribution)
   }
 
+  //
   private bucket(bucketName: string): s3.Bucket {
     return new s3.Bucket(this, "Origin", {
       bucketName,
@@ -44,8 +47,6 @@ export class Cdn extends Construct {
     })
   }
 
-
-
   //
   private hostedZone(site: string): dns.IHostedZone {
     const domainName = site.split('.').slice(1).join('.')
@@ -54,9 +55,21 @@ export class Cdn extends Construct {
     })
   }
 
+  private accessControl(): cdk.aws_cloudfront.CfnOriginAccessControl {
+    return new cdn.CfnOriginAccessControl(this, 'AccessControl', {
+      originAccessControlConfig: {
+        name: 'AccessControl',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4',
+      },
+    })
+  }
+
   //
   private cloudfront(
     s3BucketSource: s3.Bucket,
+    accessControl: cdk.aws_cloudfront.CfnOriginAccessControl,
     httpVersion: cdn.HttpVersion | undefined,
     hostname: string,
     acmCertificateArn: string,
@@ -80,20 +93,24 @@ export class Cdn extends Construct {
       // geoRestriction: [],
     })
 
-    const access = new cdn.CfnOriginAccessControl(this, 'AccessControl', {
-      originAccessControlConfig: {
-        name: 'AccessControl',
-        originAccessControlOriginType: 's3',
-        signingBehavior: 'always',
-        signingProtocol: 'sigv4',
-      },
-    })
-
     const cfnDistribution = dist.node.defaultChild as cdn.CfnDistribution
 
-    cfnDistribution.addPropertyOverride('DistributionConfig.Origins.0.OriginAccessControlId', access.getAtt('Id'))
-    cfnDistribution.addPropertyOverride('DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity', '')
+    cfnDistribution.addPropertyOverride(
+      'DistributionConfig.Origins.0.OriginAccessControlId',
+      accessControl.getAtt('Id'),
+    )
+    cfnDistribution.addPropertyOverride(
+      'DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity',
+      '',
+    )
 
+    return dist
+  }
+
+  private injectBucketPolicy(
+    s3BucketSource: s3.Bucket,
+    distributionId: string
+  ) {
     s3BucketSource.addToResourcePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
@@ -104,13 +121,11 @@ export class Cdn extends Construct {
         resources: [s3BucketSource.arnForObjects("*")],
         conditions: {
           "StringEquals": {
-            "AWS:SourceArn": "arn:aws:cloudfront::" + cdk.Aws.ACCOUNT_ID + ":distribution/" + dist.distributionId
+            "AWS:SourceArn": "arn:aws:cloudfront::" + cdk.Aws.ACCOUNT_ID + ":distribution/" + distributionId
           }
         }
       })
     )
-
-    return dist
   }
 
   private source(
@@ -131,6 +146,7 @@ export class Cdn extends Construct {
       },
     }
   }
+
 
   //
   //
