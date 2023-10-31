@@ -6,120 +6,160 @@
 // https://github.com/fogfish/easycdn
 //
 
-import * as cdk from '@aws-cdk/core'
-import * as pure from 'aws-cdk-pure'
-import * as cdn from '@aws-cdk/aws-cloudfront'
-import * as target from '@aws-cdk/aws-route53-targets'
-import * as s3 from '@aws-cdk/aws-s3'
-import * as dns from '@aws-cdk/aws-route53'
-
-export const CDN = (
-  site: string,
-  tlsCertificateArn: string,
-): pure.IPure<s3.Bucket> => 
-  pure.use({
-    origin: Origin(site),
-    zone: HostedZone(site.split('.').slice(1).join('.')),
-    access: AccessIdentity(),
-  })
-  .flatMap(x => ({
-    cdn: CloudFront(x.origin, x.access, site, tlsCertificateArn),
-  }))
-  .flatMap(x => ({
-    dns: CloudFrontDNS(site, x.zone, x.cdn)
-  }))
-  .yield('origin')
+import { Construct } from 'constructs'
+import * as cdk from 'aws-cdk-lib';
+import { aws_iam as iam } from 'aws-cdk-lib';
+import { aws_s3 as s3 } from 'aws-cdk-lib';
+import { aws_cloudfront as cdn } from 'aws-cdk-lib';
+import { aws_route53 as dns } from 'aws-cdk-lib';
+import { aws_route53_targets as target } from 'aws-cdk-lib';
 
 //
-//
-const Origin = (bucketName: string): pure.IPure<s3.Bucket> => {
-  const Content = (): s3.BucketProps => ({
-    bucketName,
-    removalPolicy: cdk.RemovalPolicy.RETAIN,
-    websiteErrorDocument: 'error.html',
-    websiteIndexDocument: 'index.html',
-  })
-  return pure.iaac(s3.Bucket)(Content)
+export interface CdnProps {
+  readonly site: string
+  readonly httpVersion?: cdn.HttpVersion
+  readonly tlsCertificateArn: string
+  readonly bucket?: s3.Bucket
 }
 
 //
-//
-const HostedZone = (domainName: string): pure.IPure<dns.IHostedZone> => {
-  const awscdkIssue4592 = (parent: cdk.Construct, id: string, props: dns.HostedZoneProviderProps): dns.IHostedZone => (
-    dns.HostedZone.fromLookup(parent, id, props)
-  )
-  const iaac = pure.include(awscdkIssue4592) // dns.HostedZone.fromLookup
-  const SiteHostedZone = (): dns.HostedZoneProviderProps => ({ domainName })
-  return iaac(SiteHostedZone)
-}
+export class Cdn extends Construct {
+  public readonly distribution: cdk.aws_cloudfront.CloudFrontWebDistribution
 
-//
-//
-const AccessIdentity = (): pure.IPure<cdn.OriginAccessIdentity> => {
-  const fAccessIdentity = (): cdn.OriginAccessIdentityProps => ({})
+  public constructor(scope: Construct, id: string, props: CdnProps) {
+    super(scope, id)
 
-  return pure.iaac(cdn.OriginAccessIdentity)(fAccessIdentity)
-}
+    const origin = props.bucket ?? this.bucket(props.site)
+    const zone = this.hostedZone(props.site)
+    const access = this.accessControl()
+    this.distribution = this.cloudfront(origin, access, props.httpVersion, props.site, props.tlsCertificateArn)
+    this.injectBucketPolicy(origin, this.distribution.distributionId)
+    this.cloudfrontDNS(props.site, zone, this.distribution)
+  }
 
-//
-//
-const CloudFront = (
-  s3BucketSource: s3.IBucket,
-  originAccessIdentity: cdn.IOriginAccessIdentity,
-  hostname: string,
-  acmCertificateArn: string,
-): pure.IPure<cdn.CloudFrontWebDistribution> => {
-  const fCloudFront = (): cdn.CloudFrontWebDistributionProps => ({
-    httpVersion: cdn.HttpVersion.HTTP1_1,
-    originConfigs: [
-      Source(s3BucketSource, originAccessIdentity),
-    ],
-    viewerCertificate: {
-      aliases: [ hostname ],
-      props: {
-        acmCertificateArn,
-        minimumProtocolVersion: cdn.SecurityPolicyProtocol.TLS_V1_2_2018,
-        sslSupportMethod: cdn.SSLMethod.SNI,
+  //
+  private bucket(bucketName: string): s3.Bucket {
+    return new s3.Bucket(this, "Origin", {
+      bucketName,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      websiteErrorDocument: 'error.html',
+      websiteIndexDocument: 'index.html',
+    })
+  }
+
+  //
+  private hostedZone(site: string): dns.IHostedZone {
+    const domainName = site.split('.').slice(1).join('.')
+    return dns.HostedZone.fromLookup(this, "HostedZone", {
+      domainName
+    })
+  }
+
+  private accessControl(): cdk.aws_cloudfront.CfnOriginAccessControl {
+    return new cdn.CfnOriginAccessControl(this, 'AccessControl', {
+      originAccessControlConfig: {
+        name: 'AccessControl',
+        originAccessControlOriginType: 's3',
+        signingBehavior: 'always',
+        signingProtocol: 'sigv4',
       },
-    },
-    viewerProtocolPolicy: cdn.ViewerProtocolPolicy.HTTPS_ONLY,
-    // geoRestriction: [],
-  })
+    })
+  }
 
-  return pure.iaac(cdn.CloudFrontWebDistribution)(fCloudFront)
-}
+  //
+  private cloudfront(
+    s3BucketSource: s3.Bucket,
+    accessControl: cdk.aws_cloudfront.CfnOriginAccessControl,
+    httpVersion: cdn.HttpVersion | undefined,
+    hostname: string,
+    acmCertificateArn: string,
+  ): cdn.CloudFrontWebDistribution {
+    const dist = new cdn.CloudFrontWebDistribution(this, "CloudFront", {
+      httpVersion,
+      originConfigs: [
+        this.source(s3BucketSource),
+      ],
 
-const Source = (
-  s3BucketSource: s3.IBucket,
-  originAccessIdentity: cdn.IOriginAccessIdentity,
-): cdn.SourceConfiguration => ({
-  behaviors: [
-    {
-      defaultTtl: cdk.Duration.hours(24),
-      forwardedValues: {queryString: true},
-      isDefaultBehavior: true,
-      maxTtl: cdk.Duration.hours(24),
-      minTtl: cdk.Duration.seconds(0),
-    },
-  ],
-  s3OriginSource: {
-    s3BucketSource,
-    originAccessIdentity,
-  },
-})
+      viewerCertificate: {
+        aliases: [hostname],
+        props: {
+          acmCertificateArn,
+          minimumProtocolVersion: cdn.SecurityPolicyProtocol.TLS_V1_2_2018,
+          sslSupportMethod: cdn.SSLMethod.SNI,
+        },
+      },
 
-//
-//
-const CloudFrontDNS = (
-  recordName: string,
-  zone: dns.IHostedZone,
-  cloud: cdn.CloudFrontWebDistribution,
-): pure.IPure<dns.ARecord> => {
-  const SiteDNS  = (): dns.ARecordProps => ({
-    recordName,
-    target: { aliasTarget: new target.CloudFrontTarget(cloud) },
-    ttl: cdk.Duration.seconds(60),
-    zone,
-  })
-  return pure.iaac(dns.ARecord)(SiteDNS)
+      viewerProtocolPolicy: cdn.ViewerProtocolPolicy.HTTPS_ONLY,
+      // geoRestriction: [],
+    })
+
+    const cfnDistribution = dist.node.defaultChild as cdn.CfnDistribution
+
+    cfnDistribution.addPropertyOverride(
+      'DistributionConfig.Origins.0.OriginAccessControlId',
+      accessControl.getAtt('Id'),
+    )
+    cfnDistribution.addPropertyOverride(
+      'DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity',
+      '',
+    )
+
+    return dist
+  }
+
+  private injectBucketPolicy(
+    s3BucketSource: s3.Bucket,
+    distributionId: string
+  ) {
+    s3BucketSource.addToResourcePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        principals: [
+          new iam.ServicePrincipal("cloudfront.amazonaws.com"),
+        ],
+        actions: ["s3:GetObject"],
+        resources: [s3BucketSource.arnForObjects("*")],
+        conditions: {
+          "StringEquals": {
+            "AWS:SourceArn": "arn:aws:cloudfront::" + cdk.Aws.ACCOUNT_ID + ":distribution/" + distributionId
+          }
+        }
+      })
+    )
+  }
+
+  private source(
+    s3BucketSource: s3.IBucket,
+  ): cdn.SourceConfiguration {
+    return {
+      behaviors: [
+        {
+          defaultTtl: cdk.Duration.hours(24),
+          forwardedValues: { queryString: true },
+          isDefaultBehavior: true,
+          maxTtl: cdk.Duration.hours(24),
+          minTtl: cdk.Duration.seconds(0),
+        },
+      ],
+      s3OriginSource: {
+        s3BucketSource,
+      },
+    }
+  }
+
+
+  //
+  //
+  private cloudfrontDNS(
+    recordName: string,
+    zone: dns.IHostedZone,
+    cloud: cdn.CloudFrontWebDistribution,
+  ): dns.ARecord {
+    return new dns.ARecord(this, "ARecord", {
+      recordName,
+      target: { aliasTarget: new target.CloudFrontTarget(cloud) },
+      ttl: cdk.Duration.seconds(60),
+      zone,
+    })
+  }
 }
