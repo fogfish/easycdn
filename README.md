@@ -1,6 +1,6 @@
 # EasyCDN
 
-EasyCDN is AWS CDK pattern that takes care about configuration of the infrastructure required to securely deliver content through AWS CloudFront. 
+EasyCDN is AWS CDK L# Construct that takes care about configuration of the infrastructure required to securely deliver content through AWS CloudFront. 
 
 [![Build Status](https://github.com/fogfish/easycdn/workflows/build/badge.svg)](https://github.com/fogfish/easycdn/actions/)
 [![Git Hub](https://img.shields.io/github/last-commit/fogfish/easycdn.svg)](https://github.com/fogfish/easycdn)
@@ -10,7 +10,9 @@ EasyCDN is AWS CDK pattern that takes care about configuration of the infrastruc
 
 ## Inspiration
 
-AWS CloudFront is a convenient approach for static content distribution. Unfortunately, it requires a boilerplate AWS CDK code to bootstrap the provisioning of required resources. This library implements a high-order components on top of AWS CDK that simplify the deployment.
+AWS CloudFront is a convenient approach for static content distribution. Unfortunately, it requires a boilerplate AWS CDK code to bootstrap the provisioning of required resources. This L3 Construct implements a high-order components on top of AWS CDK that simplify the deployment.
+
+It is implemented as using jsii, making it available 
 
 ## Getting started
 
@@ -23,21 +25,16 @@ npm install --save easycdn
 ### Example of usage
 
 ```js
-import * as pure from 'aws-cdk-pure'
 import * as easy from 'easycdn'
+const stack = new cdk.Stack(app, 'test', { /* ... */ })
 
 // creation of CDN requires definition of 
 //  - site name
 //  - tls certificate arn
-const cdn = easy.CDN(
+const cdn = new easy.Cdn(stack, 'CDN',
   'cdn.example.com',
   'arn:aws:acm:us-east-1:000000000000:certificate/xxxxxxxx-xx...xxxx',
 )
-
-//
-// injects CDN to your stack and get reference to origin s3 bucket
-const stack = new cdk.Stack(/* ... */)
-const origin = pure.join(stack, cdn)
 ```
 
 ## HowTo Contribute
