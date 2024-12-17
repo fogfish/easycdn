@@ -11,6 +11,7 @@ import * as cdk from 'aws-cdk-lib';
 import { aws_iam as iam } from 'aws-cdk-lib';
 import { aws_s3 as s3 } from 'aws-cdk-lib';
 import { aws_cloudfront as cdn } from 'aws-cdk-lib';
+import { aws_cloudfront_origins as origins } from 'aws-cdk-lib';
 import { aws_route53 as dns } from 'aws-cdk-lib';
 import { aws_route53_targets as target } from 'aws-cdk-lib';
 
@@ -24,15 +25,14 @@ export interface CdnProps {
 
 //
 export class Cdn extends Construct {
-  public readonly distribution: cdk.aws_cloudfront.CloudFrontWebDistribution
+  public readonly distribution: cdk.aws_cloudfront.Distribution
 
   public constructor(scope: Construct, id: string, props: CdnProps) {
     super(scope, id)
 
     const origin = props.bucket ?? this.bucket(props.site)
     const zone = this.hostedZone(props.site)
-    const access = this.accessControl()
-    this.distribution = this.cloudfront(origin, access, props.httpVersion, props.site, props.tlsCertificateArn)
+    this.distribution = this.cloudfront(origin, props.httpVersion, props.site, props.tlsCertificateArn)
     this.injectBucketPolicy(origin, this.distribution.distributionId)
     this.cloudfrontDNS(props.site, zone, this.distribution)
   }
@@ -55,54 +55,24 @@ export class Cdn extends Construct {
     })
   }
 
-  private accessControl(): cdk.aws_cloudfront.CfnOriginAccessControl {
-    return new cdn.CfnOriginAccessControl(this, 'AccessControl', {
-      originAccessControlConfig: {
-        name: 'AccessControl',
-        originAccessControlOriginType: 's3',
-        signingBehavior: 'always',
-        signingProtocol: 'sigv4',
-      },
-    })
-  }
-
   //
   private cloudfront(
     s3BucketSource: s3.Bucket,
-    accessControl: cdk.aws_cloudfront.CfnOriginAccessControl,
     httpVersion: cdn.HttpVersion | undefined,
     hostname: string,
     acmCertificateArn: string,
-  ): cdn.CloudFrontWebDistribution {
-    const dist = new cdn.CloudFrontWebDistribution(this, "CloudFront", {
+  ): cdn.Distribution {
+    const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(this, "TLSCert", acmCertificateArn)
+
+    const dist = new cdn.Distribution(this, "CloudFront", {
       httpVersion,
-      originConfigs: [
-        this.source(s3BucketSource),
-      ],
+      defaultBehavior: this.source(s3BucketSource),
 
-      viewerCertificate: {
-        aliases: [hostname],
-        props: {
-          acmCertificateArn,
-          minimumProtocolVersion: cdn.SecurityPolicyProtocol.TLS_V1_2_2018,
-          sslSupportMethod: cdn.SSLMethod.SNI,
-        },
-      },
-
-      viewerProtocolPolicy: cdn.ViewerProtocolPolicy.HTTPS_ONLY,
-      // geoRestriction: [],
+      domainNames: [hostname],
+      certificate,
+      minimumProtocolVersion: cdn.SecurityPolicyProtocol.TLS_V1_2_2021,
+      sslSupportMethod: cdn.SSLMethod.SNI,
     })
-
-    const cfnDistribution = dist.node.defaultChild as cdn.CfnDistribution
-
-    cfnDistribution.addPropertyOverride(
-      'DistributionConfig.Origins.0.OriginAccessControlId',
-      accessControl.getAtt('Id'),
-    )
-    cfnDistribution.addPropertyOverride(
-      'DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity',
-      '',
-    )
 
     return dist
   }
@@ -130,30 +100,26 @@ export class Cdn extends Construct {
 
   private source(
     s3BucketSource: s3.IBucket,
-  ): cdn.SourceConfiguration {
+  ): cdn.BehaviorOptions {
+    const originAccessControl = new cdn.S3OriginAccessControl(this, 'AccessControl', {})
+
     return {
-      behaviors: [
+      origin: origins.S3BucketOrigin.withOriginAccessControl(s3BucketSource,
         {
-          defaultTtl: cdk.Duration.hours(24),
-          forwardedValues: { queryString: true },
-          isDefaultBehavior: true,
-          maxTtl: cdk.Duration.hours(24),
-          minTtl: cdk.Duration.seconds(0),
-        },
-      ],
-      s3OriginSource: {
-        s3BucketSource,
-      },
+          originAccessControl,
+        }),
+      viewerProtocolPolicy: cdn.ViewerProtocolPolicy.HTTPS_ONLY,
+      // Note: using default caching optimized policy
+      // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html#managed-cache-caching-optimized
     }
   }
-
 
   //
   //
   private cloudfrontDNS(
     recordName: string,
     zone: dns.IHostedZone,
-    cloud: cdn.CloudFrontWebDistribution,
+    cloud: cdn.Distribution,
   ): dns.ARecord {
     return new dns.ARecord(this, "ARecord", {
       recordName,
