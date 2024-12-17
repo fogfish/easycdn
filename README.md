@@ -49,7 +49,7 @@ The project is [MIT](https://github.com/fogfish/easycdn/blob/master/LICENSE) lic
 
 ```bash
 git clone https://github.com/fogfish/easycdn
-cd scud
+cd easycdn
 
 npm install
 npm run build
